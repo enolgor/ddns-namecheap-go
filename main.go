@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,7 +18,7 @@ var host string
 const (
 	hostFlag      = "host"
 	hostFlagShort = "h"
-	hostUsage     = "Hostname to update, not domain"
+	hostUsage     = "Hostnames to update (comma separated), not domain"
 )
 
 var domain string
@@ -44,26 +46,24 @@ const (
 	intervalDefault   = 5 * 60
 )
 
-var logfile string
-
-const (
-	logfileFlag      = "log"
-	logfileFlagShort = "l"
-	logfileUsage     = "Log file path"
-	logfileDefault   = "/ddns-namecheap-go.log"
-)
-
 func init() {
-	flag.StringVar(&host, hostFlag, "", hostUsage)
-	flag.StringVar(&host, hostFlagShort, "", hostUsage+" (shortcut)")
-	flag.StringVar(&domain, domainFlag, "", domainUsage)
-	flag.StringVar(&domain, domainFlagShort, "", domainUsage+" (shortcut)")
-	flag.StringVar(&password, passwordFlag, "", passwordUsage)
-	flag.StringVar(&password, passwordFlagShort, "", passwordUsage+" (shortcut)")
-	flag.IntVar(&interval, intervalFlag, intervalDefault, intervalUsage)
-	flag.IntVar(&interval, intervalFlagShort, intervalDefault, intervalUsage+"( shortcut)")
-	flag.StringVar(&logfile, logfileFlag, logfileDefault, logfileUsage)
-	flag.StringVar(&logfile, logfileFlagShort, logfileDefault, logfileUsage+" (shortcut)")
+	log.SetOutput(os.Stdout)
+	envHost := os.Getenv("HOST")
+	envDomain := os.Getenv("DOMAIN")
+	envPassword := os.Getenv("PASSWORD")
+	var envInterval int
+	var err error
+	if envInterval, err = strconv.Atoi(os.Getenv("INTERVAL")); err != nil {
+		envInterval = intervalDefault
+	}
+	flag.StringVar(&host, hostFlag, envHost, hostUsage)
+	flag.StringVar(&host, hostFlagShort, envHost, hostUsage+" (shortcut)")
+	flag.StringVar(&domain, domainFlag, envDomain, domainUsage)
+	flag.StringVar(&domain, domainFlagShort, envDomain, domainUsage+" (shortcut)")
+	flag.StringVar(&password, passwordFlag, envPassword, passwordUsage)
+	flag.StringVar(&password, passwordFlagShort, envPassword, passwordUsage+" (shortcut)")
+	flag.IntVar(&interval, intervalFlag, envInterval, intervalUsage)
+	flag.IntVar(&interval, intervalFlagShort, envInterval, intervalUsage+"( shortcut)")
 	flag.Parse()
 	if host == "" || domain == "" || password == "" {
 		flag.PrintDefaults()
@@ -72,27 +72,28 @@ func init() {
 	if interval <= 0 {
 		panic("Interval must be greater than 0")
 	}
+	log.Printf("Host=%s; Domain=%s; Interval=%d\n", host, domain, interval)
 }
 
 func main() {
-	f, err := os.OpenFile(logfile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatalf("error opening file: %v", err)
+	hosts := strings.Split(host, ",")
+	urls := make(map[string]string)
+	for _, hostname := range hosts {
+		urls[hostname] = fmt.Sprintf("https://dynamicdns.park-your-domain.com/update?host=%s&domain=%s&password=%s", hostname, domain, password)
 	}
-	defer f.Close()
-	log.SetOutput(f)
-	url := fmt.Sprintf("https://dynamicdns.park-your-domain.com/update?host=%s&domain=%s&password=%s", host, domain, password)
 	for {
-		b, err := fetch(url)
-		if err != nil {
-			log.Fatal(err)
+		for hostname, url := range urls {
+			b, err := fetch(url)
+			if err != nil {
+				log.Fatal(err)
+			}
+			res := result{}
+			err = xml.Unmarshal(b, &res)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Host: %s - %s\n", hostname, res)
 		}
-		res := result{}
-		err = xml.Unmarshal(b, &res)
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Print(res)
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
 
